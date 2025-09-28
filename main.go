@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -39,11 +40,7 @@ func main() {
 
 	setupLog(opts.Debug)
 	checks.InitStorage()
-
-	// Configure HTTP client
 	checks.ConfigureHttpClient(time.Duration(opts.HttpTimeout) * time.Second)
-
-	// Configure SSL expiry threshold
 	checks.SetGlobalSSLExpiryThreshold(opts.SSLExpiryAlertDays)
 
 	bot, err := tgbotapi.NewBotAPI(opts.Telegram.Token)
@@ -52,14 +49,13 @@ func main() {
 	}
 	bot.Debug = opts.Debug
 
-	// Set up bot commands menu
 	setupBotCommands(bot)
-
 	_, err = bot.Send(tgbotapi.NewMessage(opts.Telegram.Chat, "Server health check bot started"))
 	if err != nil {
 		log.Printf("[ERROR] Failed to send start message: %v", err)
 	}
 
+	// Start cron checks
 	c := cron.New(cron.WithSeconds())
 	_, err = c.AddFunc(opts.ChecksCron, func() {
 		checks.PerformCheck(bot, opts.Telegram.Chat, opts.AlertThreshold)
@@ -69,10 +65,25 @@ func main() {
 	}
 	c.Start()
 
+	// Start /ping HTTP endpoint for Render Web Service
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "10000"
+	}
+	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
+	})
+	go func() {
+		fmt.Printf("HTTP ping endpoint listening on port %s\n", port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			log.Fatalf("[ERROR] HTTP server failed: %v", err)
+		}
+	}()
+
+	// Start listening for Telegram updates (blocking)
 	events.ListenTelegramUpdates(bot, opts.SuperUsers)
 }
 
-// setupBotCommands configures the commands menu shown in Telegram
 func setupBotCommands(bot *tgbotapi.BotAPI) {
 	commands := []tgbotapi.BotCommand{
 		{Command: "add", Description: "Add server to monitor"},
