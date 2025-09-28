@@ -33,29 +33,38 @@ var opts struct {
 
 func main() {
 	fmt.Println("Server health check bot started")
+
+	// Parse flags / environment variables
 	if _, err := flags.Parse(&opts); err != nil {
 		log.Printf("[ERROR] failed to parse flags: %v", err)
 		os.Exit(1)
 	}
 
+	// Setup logging
 	setupLog(opts.Debug)
+
+	// Initialize storage, HTTP client, SSL expiry threshold
 	checks.InitStorage()
 	checks.ConfigureHttpClient(time.Duration(opts.HttpTimeout) * time.Second)
 	checks.SetGlobalSSLExpiryThreshold(opts.SSLExpiryAlertDays)
 
+	// Initialize Telegram bot
 	bot, err := tgbotapi.NewBotAPI(opts.Telegram.Token)
 	if err != nil {
 		log.Fatalf("failed to create bot: %v", err)
 	}
 	bot.Debug = opts.Debug
 
+	// Setup bot commands menu
 	setupBotCommands(bot)
+
+	// Send startup message to admin chat
 	_, err = bot.Send(tgbotapi.NewMessage(opts.Telegram.Chat, "Server health check bot started"))
 	if err != nil {
 		log.Printf("[ERROR] Failed to send start message: %v", err)
 	}
 
-	// Start cron checks
+	// Start cron health checks
 	c := cron.New(cron.WithSeconds())
 	_, err = c.AddFunc(opts.ChecksCron, func() {
 		checks.PerformCheck(bot, opts.Telegram.Chat, opts.AlertThreshold)
@@ -80,10 +89,11 @@ func main() {
 		}
 	}()
 
-	// Start listening for Telegram updates (blocking)
+	// Start listening for Telegram updates (blocking call)
 	events.ListenTelegramUpdates(bot, opts.SuperUsers)
 }
 
+// setupBotCommands configures Telegram bot commands menu
 func setupBotCommands(bot *tgbotapi.BotAPI) {
 	commands := []tgbotapi.BotCommand{
 		{Command: "add", Description: "Add server to monitor"},
@@ -108,6 +118,7 @@ func setupBotCommands(bot *tgbotapi.BotAPI) {
 	}
 }
 
+// setupLog configures logger
 func setupLog(dbg bool) {
 	logOpts := []lgr.Option{lgr.Msec, lgr.LevelBraces, lgr.StackTraceOnError}
 	if dbg {
